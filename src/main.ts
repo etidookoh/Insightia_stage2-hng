@@ -62,7 +62,7 @@ async function bootstrap() {
   app.enableCors({ origin: '*' });
   app.useGlobalFilters(new AllExceptionsFilter());
 
-  const port = process.env.PORT || 3000;
+  const port = process.env.PORT || 3007;
   await app.listen(port);
   console.log(`🚀 Insighta Engine running on http://localhost:${port}`);
 }

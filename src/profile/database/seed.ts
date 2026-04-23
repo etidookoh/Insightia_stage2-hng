@@ -6,16 +6,25 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
+// const AppDataSource = new DataSource({
+//   type: 'postgres',
+//   host: process.env.DB_HOST || 'localhost',
+//   port: parseInt(process.env.DB_PORT || '5432'),
+//   username: process.env.DB_USERNAME || 'postgres',
+//   password: process.env.DB_PASSWORD || '',
+//   database: process.env.DB_NAME || 'hng-stage-2',
+//   entities: [Profile],
+//   synchronize: true,
+//   logging: false,
+// });
+
 const AppDataSource = new DataSource({
   type: 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  username: process.env.DB_USERNAME || 'postgres',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'insighta_db',
+  url: process.env.DATABASE_URL,
   entities: [Profile],
   synchronize: true,
   logging: false,
+  ssl: false,
 });
 
 async function seed() {
@@ -25,7 +34,7 @@ async function seed() {
   const repo = AppDataSource.getRepository(Profile);
 
   // Load seed data
-  const seedPath = path.join(__dirname, '..', '..', 'seed_profiles.json');
+  const seedPath = path.join(__dirname, '..', '..','..', 'seed_profiles.json');
   const raw = fs.readFileSync(seedPath, 'utf-8');
   const { profiles } = JSON.parse(raw) as {
     profiles: Array<{

@@ -41,8 +41,8 @@ DB_HOST=localhost
 DB_PORT=5432
 DB_USERNAME=postgres
 DB_PASSWORD=your_password
-DB_NAME=insighta_db
-PORT=3000
+DB_NAME=hng-stage-2
+PORT=3007
 ```
 
 ### 3. Create the Database
@@ -72,7 +72,7 @@ npm run build
 npm run start:prod
 ```
 
-Server runs at `http://localhost:3000` by default.
+Server runs at `http://localhost:3007` by default.
 
 ---
 
