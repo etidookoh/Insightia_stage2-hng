@@ -6,7 +6,7 @@ A queryable demographic intelligence backend built with **NestJS**, **TypeORM**,
 
 ## Live Demo
 
-**Base URL:** 
+**Base URL:** `https://stage-2-hng-beta.vercel.app/`
 
 ## Tech Stack
 
@@ -23,7 +23,7 @@ A queryable demographic intelligence backend built with **NestJS**, **TypeORM**,
 ### 1. Clone & Install
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/etidookoh/stage-2-hng
 cd hng-stage-2
 npm install
 ```
