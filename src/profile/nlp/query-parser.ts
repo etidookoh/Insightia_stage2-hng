@@ -6,7 +6,6 @@ export interface ParsedQuery {
   max_age?: number;
 }
 
-// ISO country name → code map (African-focused + common)
 const COUNTRY_MAP: Record<string, string> = {
   nigeria: 'NG',
   nigerian: 'NG',
@@ -115,7 +114,6 @@ const COUNTRY_MAP: Record<string, string> = {
   australian: 'AU',
 };
 
-// Age group → min/max age
 const AGE_GROUP_MAP: Record<string, { min?: number; max?: number }> = {
   child: { min: 0, max: 12 },
   children: { min: 0, max: 12 },
@@ -131,7 +129,6 @@ const AGE_GROUP_MAP: Record<string, { min?: number; max?: number }> = {
   young: { min: 16, max: 24 },
 };
 
-// Age group → stored age_group value
 const AGE_GROUP_VALUE: Record<string, string> = {
   child: 'child',
   children: 'child',
@@ -154,7 +151,6 @@ export function parseNaturalQuery(q: string): ParsedQuery | null {
   const result: ParsedQuery = {};
   let remainingInput = input;
 
-  // ── Gender ──
   if (/\bmales?\b/.test(remainingInput)) {
     result.gender = 'male';
   } else if (/\bfemales?\b/.test(remainingInput)) {
@@ -164,9 +160,7 @@ export function parseNaturalQuery(q: string): ParsedQuery | null {
   } else if (/\b(women|woman|girl|girls)\b/.test(remainingInput)) {
     result.gender = 'female';
   }
-  // "male and female" or "both" → no gender filter (all genders)
 
-  // ── Country: "from <country>" or "in <country>" ──
   const countryPhraseMatch = remainingInput.match(/\b(?:from|in)\s+([a-z\s']+?)(?:\s+(?:above|below|under|over|aged?|between|who|that|with|and|$))/);
   if (countryPhraseMatch) {
     const candidate = countryPhraseMatch[1].trim();
@@ -175,9 +169,7 @@ export function parseNaturalQuery(q: string): ParsedQuery | null {
     }
   }
 
-  // Fallback: scan all country names in input
   if (!result.country_id) {
-    // Try longest match first
     const sortedKeys = Object.keys(COUNTRY_MAP).sort((a, b) => b.length - a.length);
     for (const key of sortedKeys) {
       const regex = new RegExp(`\\b${key.replace(/'/g, "\\'")}\\b`);
@@ -188,7 +180,6 @@ export function parseNaturalQuery(q: string): ParsedQuery | null {
     }
   }
 
-  // ── Age group keywords ──
   const ageGroupKeys = Object.keys(AGE_GROUP_MAP).sort((a, b) => b.length - a.length);
   for (const key of ageGroupKeys) {
     const regex = new RegExp(`\\b${key}\\b`);
@@ -199,7 +190,6 @@ export function parseNaturalQuery(q: string): ParsedQuery | null {
       if (groupValue) {
         result.age_group = groupValue;
       }
-      // "young" uses age range only, not a stored age_group
       if (range.min !== undefined && result.min_age === undefined) {
         result.min_age = range.min;
       }
@@ -210,21 +200,15 @@ export function parseNaturalQuery(q: string): ParsedQuery | null {
     }
   }
 
-  // ── Explicit age constraints ──
-  // "above X" / "over X" / "older than X"
   const aboveMatch = remainingInput.match(/\b(?:above|over|older than)\s+(\d+)/);
   if (aboveMatch) {
     result.min_age = parseInt(aboveMatch[1], 10);
-    // override age_group min if explicit age given
   }
-
-  // "below X" / "under X" / "younger than X"
   const belowMatch = remainingInput.match(/\b(?:below|under|younger than)\s+(\d+)/);
   if (belowMatch) {
     result.max_age = parseInt(belowMatch[1], 10);
   }
 
-  // "aged X" / "age X"
   const agedMatch = remainingInput.match(/\baged?\s+(\d+)/);
   if (agedMatch) {
     const exactAge = parseInt(agedMatch[1], 10);
@@ -232,14 +216,12 @@ export function parseNaturalQuery(q: string): ParsedQuery | null {
     result.max_age = exactAge;
   }
 
-  // "between X and Y"
   const betweenMatch = remainingInput.match(/\bbetween\s+(\d+)\s+and\s+(\d+)/);
   if (betweenMatch) {
     result.min_age = parseInt(betweenMatch[1], 10);
     result.max_age = parseInt(betweenMatch[2], 10);
   }
 
-  // ── Validate: at least one filter was extracted ──
   const hasFilter =
     result.gender !== undefined ||
     result.age_group !== undefined ||

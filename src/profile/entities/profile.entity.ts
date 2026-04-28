@@ -1,5 +1,4 @@
-import {
-  Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index,} from 'typeorm';
+import {Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index,} from 'typeorm';
 
 @Entity('profiles')
 export class Profile {

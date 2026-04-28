@@ -6,18 +6,6 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-// const AppDataSource = new DataSource({
-//   type: 'postgres',
-//   host: process.env.DB_HOST || 'localhost',
-//   port: parseInt(process.env.DB_PORT || '5432'),
-//   username: process.env.DB_USERNAME || 'postgres',
-//   password: process.env.DB_PASSWORD || '',
-//   database: process.env.DB_NAME || 'hng-stage-2',
-//   entities: [Profile],
-//   synchronize: true,
-//   logging: false,
-// });
-
 const AppDataSource = new DataSource({
   type: 'postgres',
   url: process.env.DATABASE_URL,
@@ -33,7 +21,6 @@ async function seed() {
 
   const repo = AppDataSource.getRepository(Profile);
 
-  // Load seed data
   const seedPath = path.join(__dirname, '..', '..','..', 'seed_profiles.json');
   const raw = fs.readFileSync(seedPath, 'utf-8');
   const { profiles } = JSON.parse(raw) as {
@@ -54,7 +41,6 @@ async function seed() {
   let inserted = 0;
   let skipped = 0;
 
-  // Batch upsert — insert on conflict (name) do nothing
   const batchSize = 100;
   for (let i = 0; i < profiles.length; i += batchSize) {
     const batch = profiles.slice(i, i + batchSize);
@@ -62,13 +48,12 @@ async function seed() {
       .insert()
       .into(Profile)
       .values(batch)
-      .orIgnore() // skip duplicates by unique name
+      .orIgnore() 
       .execute();
     inserted += result.raw?.length ?? 0;
     skipped += batch.length - (result.raw?.length ?? 0);
   }
 
-  // More reliable count approach
   const total = await repo.count();
   console.log(`✅ Seeding complete. Total profiles in DB: ${total}`);
 
