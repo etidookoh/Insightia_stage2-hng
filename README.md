@@ -1,238 +1,161 @@
-# Insight Engine — Intelligence Query API
+# Insighta Labs+ Backend
 
-A queryable demographic intelligence backend built with **NestJS**, **TypeORM**, and **PostgreSQL**. Supports advanced filtering, sorting, pagination, and a rule-based natural language query interface.
+A secure, multi-interface profile intelligence platform built with NestJS and PostgreSQL.
 
----
+## System Architecture
 
-## Live Demo
+┌─────────────────────────────────────────────────────┐
+│                    Insighta Labs+                    │
+├─────────────┬──────────────────┬────────────────────┤
+│   CLI Tool  │   Web Portal     │   Direct API       │
+│  (Node.js)  │   (Next.js)      │   (REST)           │
+└──────┬──────┴────────┬─────────┴────────┬───────────┘
+│               │                  │
+└───────────────▼──────────────────┘
+│
+┌────────▼────────┐
+│  NestJS Backend │
+│   Port 3000     │
+├─────────────────┤
+│  Auth Module    │
+│  Profile Module │
+│  RBAC Guards    │
+│  Rate Limiting  │
+└────────┬────────┘
+│
+┌────────▼────────┐
+│   PostgreSQL    │
+│   (Supabase)    │
+│                 │
+│  users          │
+│  profiles       │
+│  refresh_tokens │
+└─────────────────┘
 
-**Base URL:** `https://stage-2-hng-beta.vercel.app/`
+## Auth Flow
 
-## Tech Stack
+1. Client initiates login → `GET /auth/github`
+2. Backend sets `cli_redirect` cookie (CLI flow) then redirects to GitHub OAuth
+3. User authorizes on GitHub
+4. GitHub redirects to `GET /auth/github/callback`
+5. Backend exchanges code, finds or creates user, issues tokens
+6. Backend redirects to frontend/CLI with `access_token` + `refresh_token`
+7. Client stores tokens and includes `Authorization: Bearer <token>` on all requests
 
-- **Runtime**: Node.js + TypeScript
-- **Framework**: NestJS
-- **ORM**: TypeORM
-- **Database**: PostgreSQL
-- **Validation**: class-validator + class-transformer
+### PKCE (CLI Flow)
+- CLI opens `GET /auth/github?cli_redirect=http://localhost:9876/callback`
+- Backend stores redirect in cookie before OAuth handshake
+- After GitHub callback, backend redirects to CLI local server with tokens
+- CLI stores credentials at `~/.insighta/credentials.json`
 
----
+### Token Expiry
+| Token | Expiry |
+|-------|--------|
+| Access token | 3 minutes |
+| Refresh token | 5 minutes |
+
+- Refresh tokens are single-use — invalidated immediately after use
+- New pair issued on every refresh
+- Logout invalidates the refresh token server-side
+
+## Role Enforcement Logic
+
+Two roles: `admin` and `analyst`. Default role on signup: `analyst`.
+
+| Endpoint | Analyst | Admin |
+|----------|---------|-------|
+| GET /api/profiles | ✓ | ✓ |
+| GET /api/profiles/search | ✓ | ✓ |
+| GET /api/profiles/export | ✓ | ✓ |
+| GET /api/profiles/:id | ✓ | ✓ |
+| POST /api/profiles | ✗ | ✓ |
+
+Enforcement is handled globally via two NestJS guards registered as `APP_GUARD`:
+- `JwtAuthGuard` — validates Bearer token on every request
+- `RolesGuard` — checks `@Roles()` decorator against `user.role`
+
+Routes marked `@Public()` bypass JWT guard entirely (auth endpoints).
+
+## API Versioning
+
+All `/api/*` endpoints require the header:
+
+Missing header returns `400 Bad Request`.
+
+## Rate Limiting
+
+| Scope | Limit |
+|-------|-------|
+| `/auth/*` | 10 requests/minute |
+| All other endpoints | 60 requests/minute per user |
+
+## Natural Language Parsing
+
+The NLP parser (`src/profile/nlp/query-parser.ts`) extracts structured filters from free-text queries using keyword matching and pattern recognition:
+
+- Gender: detects "male", "female", "men", "women", "boys", "girls"
+- Age groups: detects "young", "adult", "senior", "child", "teenager"
+- Age ranges: detects patterns like "under 30", "over 25", "between 20 and 40"
+- Countries: detects country names and ISO codes (e.g. "Nigeria" → "NG")
+
+Example: `"young males from Nigeria"` → `{ gender: "male", age_group: "young adult", country_id: "NG" }`
 
 ## Setup
 
-### 1. Clone & Install
-
 ```bash
-git clone https://github.com/etidookoh/stage-2-hng
-cd hng-stage-2
+# Install dependencies
 npm install
-```
 
-### 2. Configure Environment
-
-```bash
+# Configure environment
 cp .env.example .env
-```
+# Fill in your values
 
-Edit `.env`:
-
-```env
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=postgres
-DB_PASSWORD=your_password
-DB_NAME=hng-stage-2
-PORT=3007
-```
-
-### 3. Create the Database
-
-```bash
-psql -U postgres -c "CREATE DATABASE insighta_db;"
-```
-
-### 4. Seed the Database
-
-Place `seed_profiles.json` in the project root (already included), then run:
-
-```bash
-npm run seed
-```
-
-The seeder is **idempotent** — re-running it will not create duplicates. It uses `INSERT ... ON CONFLICT DO NOTHING` keyed on the unique `name` column.
-
-### 5. Start the Server
-
-```bash
-# Development (watch mode)
+# Run in development
 npm run start:dev
 
-# Production
+# Run in production
 npm run build
 npm run start:prod
 ```
 
-Server runs at `http://localhost:3007` by default.
+## Environment Variables
 
----
-
-## API Reference
-
-### `GET /api/profiles`
-
-Returns a paginated, filtered, and sorted list of profiles.
-
-**Query Parameters:**
-
-| Parameter                 | Type   | Description                                    |
-|--------------------------|--------|------------------------------------------------|
-| `gender`                 | string | `male` or `female`                             |
-| `age_group`              | string | `child`, `teenager`, `adult`, `senior`         |
-| `country_id`             | string | ISO 2-letter code (e.g. `NG`, `KE`)           |
-| `min_age`                | number | Minimum age (inclusive)                        |
-| `max_age`                | number | Maximum age (inclusive)                        |
-| `min_gender_probability` | float  | Minimum gender confidence score (0–1)          |
-| `min_country_probability`| float  | Minimum country confidence score (0–1)         |
-| `sort_by`                | string | `age`, `created_at`, or `gender_probability`   |
-| `order`                  | string | `asc` or `desc` (default: `asc`)              |
-| `page`                   | number | Page number (default: `1`)                     |
-| `limit`                  | number | Results per page (default: `10`, max: `50`)    |
-
-All filters are **combinable** — results must match **all** supplied conditions.
-
-**Example:**
-```
-GET /api/profiles?gender=male&country_id=NG&min_age=25&sort_by=age&order=desc&page=1&limit=10
+```env
+DATABASE_URL=postgresql://...
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
+JWT_SECRET=
+JWT_ACCESS_EXPIRES_IN=3m
+JWT_REFRESH_EXPIRES_IN=5m
+PORT=3000
+FRONTEND_URL=http://localhost:3001
 ```
 
-**Response:**
-```json
-{
-  "status": "success",
-  "page": 1,
-  "limit": 10,
-  "total": 142,
-  "data": [ ... ]
-}
-```
+## API Endpoints
 
----
+### Auth
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | /auth/github | Public | Initiate GitHub OAuth |
+| GET | /auth/github/callback | Public | OAuth callback |
+| POST | /auth/refresh | Public | Refresh tokens |
+| POST | /auth/logout | Bearer | Logout |
+| GET | /auth/me | Bearer | Current user |
 
-### `GET /api/profiles/search`
+### Profiles
+| Method | Endpoint | Role | Description |
+|--------|----------|------|-------------|
+| GET | /api/profiles | Any | List profiles |
+| GET | /api/profiles/search | Any | Natural language search |
+| GET | /api/profiles/export | Any | Export CSV |
+| GET | /api/profiles/:id | Any | Get profile |
+| POST | /api/profiles | Admin | Create profile |
 
-Natural language query endpoint. Interprets plain English and converts it to filters.
+## Tech Stack
 
-**Query Parameters:**
-
-| Parameter | Type   | Description                                    |
-|-----------|--------|------------------------------------------------|
-| `q`       | string | Natural language query (required)              |
-| `page`    | number | Page number (default: `1`)                     |
-| `limit`   | number | Results per page (default: `10`, max: `50`)    |
-
-**Example:**
-```
-GET /api/profiles/search?q=young males from nigeria&page=1&limit=10
-```
-
-**Response:**
-```json
-{
-  "status": "success",
-  "page": 1,
-  "limit": 10,
-  "total": 38,
-  "data": [ ... ]
-}
-```
-
-**On failure:**
-```json
-{ "status": "error", "message": "Unable to interpret query" }
-```
-
----
-
-## Natural Language Query Parser
-
-The `/search` endpoint uses a **rule-based parser** (no AI, no LLMs). It extracts structured filters from plain English using regex patterns and lookup maps.
-
-### Supported Patterns
-
-| Query                                   | Extracted Filters                                 |
-|----------------------------------------|---------------------------------------------------|
-| `young males`                          | `gender=male`, `min_age=16`, `max_age=24`         |
-| `females above 30`                     | `gender=female`, `min_age=30`                     |
-| `people from angola`                   | `country_id=AO`                                   |
-| `adult males from kenya`               | `gender=male`, `age_group=adult`, `country_id=KE` |
-| `male and female teenagers above 17`   | `age_group=teenager`, `min_age=17`                |
-| `senior women in ghana`                | `gender=female`, `age_group=senior`, `country_id=GH` |
-| `children between 5 and 10`            | `age_group=child`, `min_age=5`, `max_age=10`      |
-
-### Age Group Mappings (for parsing only)
-
-| Keyword    | Stored `age_group` | Age Range |
-|------------|--------------------|-----------|
-| `young`    | *(none)*           | 16–24     |
-| `child`    | `child`            | 0–12      |
-| `teenager` | `teenager`         | 13–17     |
-| `adult`    | `adult`            | 18–59     |
-| `senior`   | `senior`           | 60+       |
-
-> Note: `young` is a **parsing alias only** — it maps to `min_age=16, max_age=24` and is not a stored `age_group` value.
-
-### Country Resolution
-
-Country names and demonyms are resolved to ISO codes via a lookup table (e.g. `nigerian` → `NG`, `south africa` → `ZA`). Multi-word country names like `"ivory coast"` and `"south africa"` are supported.
-
-### Parser Logic
-
-1. **Gender** — detects `male/female/men/women/man/woman` keywords
-2. **Country** — matches `from <country>` / `in <country>` patterns, then falls back to scanning the full input for any known country name (longest match first)
-3. **Age group** — matches keywords (`young`, `teen`, `adult`, `senior`, etc.) and sets both the stored `age_group` (where applicable) and age range
-4. **Explicit age constraints** — parses `above X`, `below X`, `over X`, `under X`, `aged X`, `between X and Y`
-5. **Validation** — if no filter is extracted, returns `{ "status": "error", "message": "Unable to interpret query" }`
-
----
-
-## Error Responses
-
-All errors follow a consistent shape:
-
-```json
-{ "status": "error", "message": "<description>" }
-```
-
-| HTTP Code | Meaning                             |
-|-----------|-------------------------------------|
-| `400`     | Missing or empty required parameter |
-| `422`     | Invalid parameter type              |
-| `404`     | Profile not found                   |
-| `500`     | Internal server error               |
-
----
-
-## Database Schema
-
-| Field                 | Type                     | Notes                                  |
-|-----------------------|--------------------------|----------------------------------------|
-| `id`                  | UUID (auto-generated)    | Primary key                            |
-| `name`                | VARCHAR UNIQUE           | Person's full name                     |
-| `gender`              | VARCHAR                  | `male` or `female`                     |
-| `gender_probability`  | FLOAT                    | Confidence score                       |
-| `age`                 | INT                      | Exact age                              |
-| `age_group`           | VARCHAR                  | `child`, `teenager`, `adult`, `senior` |
-| `country_id`          | VARCHAR(2)               | ISO code (e.g. `NG`, `KE`)            |
-| `country_name`        | VARCHAR                  | Full country name                      |
-| `country_probability` | FLOAT                    | Confidence score                       |
-| `created_at`          | TIMESTAMP WITH TIME ZONE | Auto-generated, UTC                    |
-
----
-
-## Performance Notes
-
-- All filters use parameterised query builder conditions — no full-table scans for common filter combinations
-- `name` column has a unique index (used by the idempotent seeder)
-- Pagination uses `LIMIT` + `OFFSET` at the query level — only the requested page is fetched from the DB
-- `getManyAndCount()` fetches data and total count in a single round-trip
-- Seeder inserts in batches of 100 records for efficient bulk loading
+- NestJS + TypeScript
+- PostgreSQL (Supabase)
+- TypeORM
+- Passport.js (GitHub OAuth + JWT)
+- @nestjs/throttler (rate limiting)
