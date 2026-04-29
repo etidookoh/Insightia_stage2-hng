@@ -45,7 +45,11 @@ class AllExceptionsFilter implements ExceptionFilter {
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.use(cookieParser());
-  app.enableCors({ origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+  app.enableCors({ origin:
+    [
+    'http://localhost:3001',
+    'https://insighta-web-6l55.vercel.app',
+  ],
   credentials: true, });
   app.useGlobalFilters(new AllExceptionsFilter());
   const port = process.env.PORT || 3004;
