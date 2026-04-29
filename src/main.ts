@@ -48,7 +48,7 @@ async function bootstrap() {
   app.enableCors({ origin:
     [
     'http://localhost:3001',
-    'https://insighta-web-6l55.vercel.app',
+    'https://insighta-web-uitd.vercel.app',
   ],
   credentials: true, });
   app.useGlobalFilters(new AllExceptionsFilter());
