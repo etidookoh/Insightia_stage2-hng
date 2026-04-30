@@ -1,117 +1,19 @@
-// import { Controller, Get, Post, Body, Req, Res, UseGuards } from '@nestjs/common';
-// import { AuthGuard } from '@nestjs/passport';
-// import { AuthService } from './auth.service';
-// import { Public } from './decorators/public.decorator';
-// import { CurrentUser } from './decorators/current-user.decorator';
-// import { User } from '../users/entities/user.entity';
-// import { ConfigService } from '@nestjs/config';
-// import type { Response, Request } from 'express';
-
-// @Controller('auth')
-// export class AuthController {
-//   constructor(
-//     private readonly authService: AuthService,
-//     private readonly configService: ConfigService,
-//   ) {}
-
-//   @Public()
-// @Get('github')
-// async githubLogin(@Req() req: Request, @Res() res: Response) {
-//   const cliRedirect = (req.query as any).cli_redirect;
-//   const state = require('crypto').randomBytes(16).toString('hex');
-//   const codeVerifier = require('crypto').randomBytes(32).toString('base64url');
-//   const codeChallenge = require('crypto')
-//     .createHash('sha256')
-//     .update(codeVerifier)
-//     .digest('base64url');
-
-//   if (cliRedirect) {
-//     res.cookie('cli_redirect', cliRedirect, {
-//       httpOnly: true,
-//       maxAge: 5 * 60 * 1000,
-//       sameSite: 'lax',
-//     });
-//   }
-
-//   res.cookie('oauth_state', state, { httpOnly: true, maxAge: 5 * 60 * 1000, sameSite: 'lax' });
-//   res.cookie('code_verifier', codeVerifier, { httpOnly: true, maxAge: 5 * 60 * 1000, sameSite: 'lax' });
-
-//   const clientID = this.configService.get<string>('GITHUB_CLIENT_ID')!;
-//   const callbackURL = this.configService.get<string>('GITHUB_CALLBACK_URL')!;
-
-//   const githubUrl = `https://github.com/login/oauth/authorize?client_id=${clientID}&redirect_uri=${encodeURIComponent(callbackURL)}&scope=user:email&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
-//   return res.redirect(githubUrl);
-// }
-
-//   @Public()
-// @Get('github/callback')
-// @UseGuards(AuthGuard('github'))
-// async githubCallback(
-//   @CurrentUser() user: User,
-//   @Req() req: Request,
-//   @Res() res: Response,
-// ) {
-//   const returnedState = (req.query as any).state;
-//   const storedState = (req.cookies as any)?.oauth_state;
-
-//   if (!returnedState || !storedState || returnedState !== storedState) {
-//     return res.status(400).json({ status: 'error', message: 'Invalid state parameter' });
-//   }
-
-//   const tokens = await this.authService.generateTokens(user);
-//   const cliRedirect = (req.cookies as any)?.cli_redirect;
-
-//   res.clearCookie('oauth_state');
-//   res.clearCookie('code_verifier');
-
-//   if (cliRedirect) {
-//     res.clearCookie('cli_redirect');
-//     return res.redirect(
-//       `${cliRedirect}?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
-//     );
-//   }
-
-//   const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3001');
-//   return res.redirect(
-//     `${frontendUrl}/auth/callback?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
-//   );
-// }
-
-//   @Public()
-//   @Post('refresh')
-//   async refresh(@Body('refresh_token') refreshToken: string) {
-//     const tokens = await this.authService.refresh(refreshToken);
-//     return { status: 'success', ...tokens };
-//   }
-
-//   @Post('logout')
-//   async logout(@Body('refresh_token') refreshToken: string) {
-//     await this.authService.logout(refreshToken);
-//     return { status: 'success', message: 'Logged out' };
-//   }
-
-//   @Get('me')
-//   me(@CurrentUser() user: User) {
-//     return {
-//       status: 'success',
-//       data: {
-//         id: user.id,
-//         username: user.username,
-//         email: user.email,
-//         avatar_url: user.avatar_url,
-//         role: user.role,
-//       },
-//     };
-//   }
-// }
-
-import { Controller, Get, Post, Body, Req, Res, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Req,
+  Res,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 import { ConfigService } from '@nestjs/config';
+import { UsersService } from '../users/users.service';
 import { randomBytes, createHash } from 'crypto';
 import type { Response, Request } from 'express';
 
@@ -120,6 +22,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
+    private readonly usersService: UsersService,
   ) {}
 
   @Public()
@@ -134,28 +37,23 @@ export class AuthController {
 
     const isProduction = this.configService.get<string>('NODE_ENV') === 'production';
 
+    const cookieOptions = {
+      httpOnly: true,
+      maxAge: 5 * 60 * 1000,
+      sameSite: 'lax' as const,
+      secure: isProduction,
+      path: '/',
+    };
+
     if (cliRedirect) {
-      res.cookie('cli_redirect', cliRedirect, {
-        httpOnly: true,
-        maxAge: 5 * 60 * 1000,
-        sameSite: 'lax',
-        secure: isProduction,
-      });
+      res.cookie('cli_redirect', cliRedirect, cookieOptions);
     }
 
-    res.cookie('oauth_state', state, {
-      httpOnly: true,
-      maxAge: 5 * 60 * 1000,
-      sameSite: 'lax',
-      secure: isProduction,
-    });
+    res.cookie('oauth_state', state, cookieOptions);
+    res.cookie('code_verifier', codeVerifier, cookieOptions);
 
-    res.cookie('code_verifier', codeVerifier, {
-      httpOnly: true,
-      maxAge: 5 * 60 * 1000,
-      sameSite: 'lax',
-      secure: isProduction,
-    });
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
 
     const clientID = this.configService.get<string>('GITHUB_CLIENT_ID')!;
     const callbackURL = this.configService.get<string>('GITHUB_CALLBACK_URL')!;
@@ -174,50 +72,115 @@ export class AuthController {
 
   @Public()
   @Get('github/callback')
-  @UseGuards(AuthGuard('github'))
-  async githubCallback(
-    @CurrentUser() user: User,
-    @Req() req: Request,
-    @Res() res: Response,
-  ) {
-    const returnedState = (req.query as any).state;
+  async githubCallback(@Req() req: Request, @Res() res: Response) {
+    const { code, state: returnedState } = req.query as any;
     const storedState = (req.cookies as any)?.oauth_state;
+    const codeVerifier = (req.cookies as any)?.code_verifier;
+
+    if (!code) {
+      return res.status(400).json({ status: 'error', message: 'Missing code parameter' });
+    }
+
+    if (!returnedState) {
+      return res.status(400).json({ status: 'error', message: 'Missing state parameter' });
+    }
 
     if (storedState && returnedState !== storedState) {
       return res.status(400).json({ status: 'error', message: 'Invalid state parameter' });
     }
 
-    const tokens = await this.authService.generateTokens(user);
-    const cliRedirect = (req.cookies as any)?.cli_redirect;
-
-    res.clearCookie('oauth_state');
-    res.clearCookie('code_verifier');
-
-    if (cliRedirect) {
-      res.clearCookie('cli_redirect');
-      return res.redirect(
-        `${cliRedirect}?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
-      );
+    if (!codeVerifier) {
+      return res.status(400).json({ status: 'error', message: 'Missing code_verifier' });
     }
 
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3001');
-    return res.redirect(
-      `${frontendUrl}/auth/callback?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
-    );
+    try {
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          client_id: this.configService.get<string>('GITHUB_CLIENT_ID'),
+          client_secret: this.configService.get<string>('GITHUB_CLIENT_SECRET'),
+          code,
+          redirect_uri: this.configService.get<string>('GITHUB_CALLBACK_URL'),
+          code_verifier: codeVerifier,
+        }),
+      });
+
+      const tokenData = await tokenRes.json() as any;
+
+      if (tokenData.error || !tokenData.access_token) {
+        return res.status(400).json({
+          status: 'error',
+          message: tokenData.error_description || 'GitHub token exchange failed',
+        });
+      }
+
+      const userRes = await fetch('https://api.github.com/user', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      });
+      const githubUser = await userRes.json() as any;
+
+      const emailRes = await fetch('https://api.github.com/user/emails', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      });
+      const emails = await emailRes.json() as any[];
+      const primaryEmail = Array.isArray(emails)
+        ? emails.find((e: any) => e.primary)?.email ?? null
+        : null;
+
+      const user = await this.usersService.findOrCreate({
+        github_id: String(githubUser.id),
+        username: githubUser.login,
+        email: primaryEmail,
+        avatar_url: githubUser.avatar_url,
+      });
+
+      const tokens = await this.authService.generateTokens(user);
+
+      res.clearCookie('oauth_state');
+      res.clearCookie('code_verifier');
+
+      const cliRedirect = (req.cookies as any)?.cli_redirect;
+      if (cliRedirect) {
+        res.clearCookie('cli_redirect');
+        return res.redirect(
+          `${cliRedirect}?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
+        );
+      }
+
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3001');
+      return res.redirect(
+        `${frontendUrl}/auth/callback?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
+      );
+    } catch (err) {
+      return res.status(500).json({ status: 'error', message: 'Authentication failed' });
+    }
   }
 
   @Public()
   @Post('refresh')
+  @HttpCode(HttpStatus.OK)
   async refresh(@Body('refresh_token') refreshToken: string) {
     if (!refreshToken) {
       return { status: 'error', message: 'refresh_token is required' };
     }
-    const tokens = await this.authService.refresh(refreshToken);
-    return { status: 'success', ...tokens };
+    try {
+      const tokens = await this.authService.refresh(refreshToken);
+      return { status: 'success', ...tokens };
+    } catch (err: any) {
+      return { status: 'error', message: err.message || 'Invalid refresh token' };
+    }
   }
 
   @Post('logout')
+  @HttpCode(HttpStatus.OK)
   async logout(@Body('refresh_token') refreshToken: string) {
+    if (!refreshToken) {
+      return { status: 'error', message: 'refresh_token is required' };
+    }
     await this.authService.logout(refreshToken);
     return { status: 'success', message: 'Logged out' };
   }
