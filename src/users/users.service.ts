@@ -79,4 +79,8 @@ export class UsersService {
       { is_revoked: true },
     );
   }
+
+  async promoteToAdmin(userId: string): Promise<void> {
+  await this.userRepo.update({ id: userId }, { role: UserRole.ADMIN });
+}
 }

@@ -4,15 +4,42 @@ import { ConfigService } from '@nestjs/config';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/entities/user.entity';
 import { randomBytes } from 'crypto';
-import {StringValue} from 'ms'
+import type { StringValue } from 'ms';
+
+interface PkceEntry {
+  codeVerifier: string;
+  cliRedirect?: string;
+  expiresAt: number;
+}
 
 @Injectable()
 export class AuthService {
+  private pkceStore = new Map<string, PkceEntry>();
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
   ) {}
+
+  storePkce(state: string, codeVerifier: string, cliRedirect?: string): void {
+    this.pkceStore.set(state, {
+      codeVerifier,
+      cliRedirect,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    });
+  }
+
+  getPkce(state: string): { codeVerifier: string; cliRedirect?: string } | null {
+    const entry = this.pkceStore.get(state);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.pkceStore.delete(state);
+      return null;
+    }
+    this.pkceStore.delete(state);
+    return entry;
+  }
 
   async generateTokens(user: User): Promise<{ access_token: string; refresh_token: string }> {
     const payload = { sub: user.id, username: user.username, role: user.role };
@@ -22,7 +49,7 @@ export class AuthService {
     });
 
     const refresh_token = randomBytes(40).toString('hex');
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     await this.usersService.saveRefreshToken(user.id, refresh_token, expiresAt);
 
@@ -33,11 +60,17 @@ export class AuthService {
     const stored = await this.usersService.findRefreshToken(token);
 
     if (!stored || stored.is_revoked) {
-      throw new UnauthorizedException({ status: 'error', message: 'Invalid refresh token' });
+      throw new UnauthorizedException({
+        status: 'error',
+        message: 'Invalid refresh token',
+      });
     }
 
     if (new Date() > stored.expires_at) {
-      throw new UnauthorizedException({ status: 'error', message: 'Refresh token expired' });
+      throw new UnauthorizedException({
+        status: 'error',
+        message: 'Refresh token expired',
+      });
     }
 
     await this.usersService.revokeRefreshToken(token);
@@ -47,7 +80,12 @@ export class AuthService {
   }
 
   async logout(token: string): Promise<void> {
-    if (!token) throw new BadRequestException({ status: 'error', message: 'Refresh token required' });
+    if (!token) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'Refresh token required',
+      });
+    }
     await this.usersService.revokeRefreshToken(token);
   }
 }

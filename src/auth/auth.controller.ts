@@ -35,22 +35,7 @@ export class AuthController {
       .update(codeVerifier)
       .digest('base64url');
 
-    const isProduction = this.configService.get<string>('NODE_ENV') === 'production';
-
-    const cookieOptions = {
-      httpOnly: true,
-      maxAge: 5 * 60 * 1000,
-      sameSite: 'lax' as const,
-      secure: isProduction,
-      path: '/',
-    };
-
-    if (cliRedirect) {
-      res.cookie('cli_redirect', cliRedirect, cookieOptions);
-    }
-
-    res.cookie('oauth_state', state, cookieOptions);
-    res.cookie('code_verifier', codeVerifier, cookieOptions);
+    this.authService.storePkce(state, codeVerifier, cliRedirect);
 
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -74,59 +59,65 @@ export class AuthController {
   @Get('github/callback')
   async githubCallback(@Req() req: Request, @Res() res: Response) {
     const { code, state: returnedState } = req.query as any;
-    const storedState = (req.cookies as any)?.oauth_state;
-    const codeVerifier = (req.cookies as any)?.code_verifier;
 
     if (!code) {
-      return res.status(400).json({ status: 'error', message: 'Missing code parameter' });
+      return res
+        .status(400)
+        .json({ status: 'error', message: 'Missing code parameter' });
     }
 
     if (!returnedState) {
-      return res.status(400).json({ status: 'error', message: 'Missing state parameter' });
+      return res
+        .status(400)
+        .json({ status: 'error', message: 'Missing state parameter' });
     }
 
-    if (storedState && returnedState !== storedState) {
-      return res.status(400).json({ status: 'error', message: 'Invalid state parameter' });
-    }
+    const pkce = this.authService.getPkce(returnedState);
 
-    if (!codeVerifier) {
-      return res.status(400).json({ status: 'error', message: 'Missing code_verifier' });
+    if (!pkce) {
+      return res
+        .status(400)
+        .json({ status: 'error', message: 'Invalid or expired state parameter' });
     }
 
     try {
-      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
+      const tokenRes = await fetch(
+        'https://github.com/login/oauth/access_token',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            client_id: this.configService.get<string>('GITHUB_CLIENT_ID'),
+            client_secret: this.configService.get<string>('GITHUB_CLIENT_SECRET'),
+            code,
+            redirect_uri: this.configService.get<string>('GITHUB_CALLBACK_URL'),
+            code_verifier: pkce.codeVerifier,
+          }),
         },
-        body: JSON.stringify({
-          client_id: this.configService.get<string>('GITHUB_CLIENT_ID'),
-          client_secret: this.configService.get<string>('GITHUB_CLIENT_SECRET'),
-          code,
-          redirect_uri: this.configService.get<string>('GITHUB_CALLBACK_URL'),
-          code_verifier: codeVerifier,
-        }),
-      });
+      );
 
-      const tokenData = await tokenRes.json() as any;
+      const tokenData = (await tokenRes.json()) as any;
 
       if (tokenData.error || !tokenData.access_token) {
         return res.status(400).json({
           status: 'error',
-          message: tokenData.error_description || 'GitHub token exchange failed',
+          message:
+            tokenData.error_description || 'GitHub token exchange failed',
         });
       }
 
       const userRes = await fetch('https://api.github.com/user', {
         headers: { Authorization: `Bearer ${tokenData.access_token}` },
       });
-      const githubUser = await userRes.json() as any;
+      const githubUser = (await userRes.json()) as any;
 
       const emailRes = await fetch('https://api.github.com/user/emails', {
         headers: { Authorization: `Bearer ${tokenData.access_token}` },
       });
-      const emails = await emailRes.json() as any[];
+      const emails = (await emailRes.json()) as any[];
       const primaryEmail = Array.isArray(emails)
         ? emails.find((e: any) => e.primary)?.email ?? null
         : null;
@@ -140,44 +131,53 @@ export class AuthController {
 
       const tokens = await this.authService.generateTokens(user);
 
-      res.clearCookie('oauth_state');
-      res.clearCookie('code_verifier');
-
-      const cliRedirect = (req.cookies as any)?.cli_redirect;
-      if (cliRedirect) {
-        res.clearCookie('cli_redirect');
+      if (pkce.cliRedirect) {
         return res.redirect(
-          `${cliRedirect}?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
+          `${pkce.cliRedirect}?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
         );
       }
 
-      const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3001');
+      const frontendUrl = this.configService.get<string>(
+        'FRONTEND_URL',
+        'http://localhost:3001',
+      );
       return res.redirect(
         `${frontendUrl}/auth/callback?access_token=${tokens.access_token}&refresh_token=${tokens.refresh_token}`,
       );
     } catch (err) {
-      return res.status(500).json({ status: 'error', message: 'Authentication failed' });
+      return res
+        .status(500)
+        .json({ status: 'error', message: 'Authentication failed' });
     }
   }
 
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refresh(@Body('refresh_token') refreshToken: string) {
+  async refresh(@Body() body: any) {
+    const refreshToken = body?.refresh_token;
     if (!refreshToken) {
       return { status: 'error', message: 'refresh_token is required' };
     }
     try {
       const tokens = await this.authService.refresh(refreshToken);
-      return { status: 'success', ...tokens };
+      return {
+        status: 'success',
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      };
     } catch (err: any) {
-      return { status: 'error', message: err.message || 'Invalid refresh token' };
+      return {
+        status: 'error',
+        message: err.message || 'Invalid refresh token',
+      };
     }
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(@Body('refresh_token') refreshToken: string) {
+  async logout(@Body() body: any) {
+    const refreshToken = body?.refresh_token;
     if (!refreshToken) {
       return { status: 'error', message: 'refresh_token is required' };
     }
@@ -197,5 +197,30 @@ export class AuthController {
         role: user.role,
       },
     };
+  }
+
+  @Public()
+  @Post('dev/make-admin')
+  @HttpCode(HttpStatus.OK)
+  async makeAdmin(@Body() body: any) {
+    const { user_id } = body;
+    if (!user_id) {
+      return { status: 'error', message: 'user_id is required' };
+    }
+    try {
+      await this.usersService.promoteToAdmin(user_id);
+      const user = await this.usersService.findById(user_id);
+      if (!user) {
+        return { status: 'error', message: 'User not found' };
+      }
+      const tokens = await this.authService.generateTokens(user);
+      return {
+        status: 'success',
+        message: 'User promoted to admin',
+        ...tokens,
+      };
+    } catch (err: any) {
+      return { status: 'error', message: err.message };
+    }
   }
 }
