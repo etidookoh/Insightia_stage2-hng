@@ -1,17 +1,24 @@
 import {
   Controller, Get, Post, Query, Body, Res,
   BadRequestException, UnprocessableEntityException,
-  UsePipes, ValidationPipe, Req,
+  UsePipes, ValidationPipe, Req, UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ProfileService } from './profile.service';
+import { CsvIngestionService } from './csv-ingestion.service';
 import { QueryProfileDto } from './dto/query-profile.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/entities/user.entity';
 import type { Response, Request } from 'express';
+import { memoryStorage } from 'multer';
 
 @Controller('api/profiles')
 export class ProfileController {
-  constructor(private readonly profilesService: ProfileService) {}
+  constructor(
+    private readonly profilesService: ProfileService,
+    private readonly csvIngestionService: CsvIngestionService,
+  ) {}
 
   @Get()
   @UsePipes(new ValidationPipe({
@@ -74,5 +81,35 @@ export class ProfileController {
     }
     const data = await this.profilesService.create(name);
     return { status: 'success', data };
+  }
+
+  /**
+   * POST /api/profiles/upload
+   * Admin-only. Accepts a multipart CSV file and streams it into the database
+   * in chunks of 500 rows. Never loads the full file into memory.
+   * Returns a summary of inserted / skipped rows.
+   */
+  @Post('upload')
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(), // buffer in memory — fine since we stream it immediately
+      limits: {
+        fileSize: 100 * 1024 * 1024, // 100 MB cap
+      },
+      fileFilter: (_req, file, cb) => {
+        if (!file.originalname.match(/\.csv$/i)) {
+          return cb(new BadRequestException('Only CSV files are accepted'), false);
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async uploadCsv(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException({ status: 'error', message: 'No file uploaded' });
+    }
+    const result = await this.csvIngestionService.ingestCsvBuffer(file.buffer);
+    return result;
   }
 }

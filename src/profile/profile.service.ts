@@ -1,9 +1,12 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
+import type { Cache } from 'cache-manager';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Profile } from './entities/profile.entity';
 import { QueryProfileDto } from './dto/query-profile.dto';
 import { parseNaturalQuery } from './nlp/query-parser';
+import { normalizeFilters, buildCacheKey } from './nlp/normalize-query';
 import { Request } from 'express';
 
 export interface PaginatedResult {
@@ -20,11 +23,18 @@ export interface PaginatedResult {
   data: Profile[];
 }
 
+// Cache TTL in milliseconds — 90 seconds.
+// Short enough that newly ingested data appears quickly,
+// long enough to absorb repeated queries under load.
+const CACHE_TTL = 90_000;
+
 @Injectable()
 export class ProfileService {
   constructor(
     @InjectRepository(Profile)
     private readonly profileRepo: Repository<Profile>,
+    @Inject(CACHE_MANAGER)
+    private readonly cache: Cache,
   ) {}
 
   async findAll(query: QueryProfileDto, req: Request): Promise<PaginatedResult> {
@@ -42,17 +52,35 @@ export class ProfileService {
       limit = 10,
     } = query;
 
-    const qb = this.profileRepo.createQueryBuilder('profile');
+    const take = Math.min(limit, 50);
 
-    this.applyFilters(qb, {
-      gender, age_group, country_id, min_age, max_age,
-      min_gender_probability, min_country_probability,
+    // Build a deterministic cache key from normalized filters + pagination params.
+    // normalizeFilters() ensures "NG" and "ng" produce the same key.
+    const filters = normalizeFilters({ gender, age_group, country_id, min_age, max_age });
+    const cacheKey = buildCacheKey('findAll', filters, {
+      min_gender_probability,
+      min_country_probability,
+      sort_by,
+      order,
+      page,
+      limit: take,
     });
 
-    const sortColumn = `profile.${sort_by}`;
-    qb.orderBy(sortColumn, order.toUpperCase() as 'ASC' | 'DESC');
+    const cached = await this.cache.get<PaginatedResult>(cacheKey);
+    if (cached) return cached;
 
-    const take = Math.min(limit, 50);
+    const qb = this.profileRepo.createQueryBuilder('profile');
+    this.applyFilters(qb, {
+      gender: filters.gender,
+      age_group: filters.age_group,
+      country_id: filters.country_id,
+      min_age: filters.min_age,
+      max_age: filters.max_age,
+      min_gender_probability,
+      min_country_probability,
+    });
+
+    qb.orderBy(`profile.${sort_by}`, order.toUpperCase() as 'ASC' | 'DESC');
     const skip = (page - 1) * take;
     qb.skip(skip).take(take);
 
@@ -61,7 +89,7 @@ export class ProfileService {
     const baseUrl = `/api/profiles`;
     const queryString = this.buildQueryString(query, take);
 
-    return {
+    const result: PaginatedResult = {
       status: 'success',
       page,
       limit: take,
@@ -74,6 +102,9 @@ export class ProfileService {
       },
       data,
     };
+
+    await this.cache.set(cacheKey, result, CACHE_TTL);
+    return result;
   }
 
   async search(q: string, page: number = 1, limit: number = 10, req: Request): Promise<PaginatedResult> {
@@ -86,18 +117,25 @@ export class ProfileService {
       throw new BadRequestException('Unable to interpret query');
     }
 
+    // Normalize BEFORE building the cache key so semantically identical
+    // queries ("Nigerian females" vs "females from Nigeria") hit the same entry.
+    const normalized = normalizeFilters(parsed);
+    const take = Math.min(limit, 50);
+    const cacheKey = buildCacheKey('search', normalized, { page, limit: take });
+
+    const cached = await this.cache.get<PaginatedResult>(cacheKey);
+    if (cached) return cached;
+
     const qb = this.profileRepo.createQueryBuilder('profile');
     this.applyFilters(qb, {
-      gender: parsed.gender,
-      age_group: parsed.age_group,
-      country_id: parsed.country_id,
-      min_age: parsed.min_age,
-      max_age: parsed.max_age,
+      gender: normalized.gender,
+      age_group: normalized.age_group,
+      country_id: normalized.country_id,
+      min_age: normalized.min_age,
+      max_age: normalized.max_age,
     });
 
     qb.orderBy('profile.created_at', 'ASC');
-
-    const take = Math.min(limit, 50);
     const skip = (page - 1) * take;
     qb.skip(skip).take(take);
 
@@ -105,7 +143,7 @@ export class ProfileService {
     const total_pages = Math.ceil(total / take);
     const baseUrl = `/api/profiles/search`;
 
-    return {
+    const result: PaginatedResult = {
       status: 'success',
       page,
       limit: take,
@@ -118,6 +156,9 @@ export class ProfileService {
       },
       data,
     };
+
+    await this.cache.set(cacheKey, result, CACHE_TTL);
+    return result;
   }
 
   async create(name: string): Promise<Profile> {
@@ -140,7 +181,7 @@ export class ProfileService {
     } catch {}
 
     const age = ageRes.age ?? 0;
-    const age_group = age < 18 ? 'child' : age < 35 ? 'young adult' : age < 60 ? 'adult' : 'senior';
+    const age_group = age < 13 ? 'child' : age < 18 ? 'teenager' : age < 60 ? 'adult' : 'senior';
 
     const profile = this.profileRepo.create({
       name,
